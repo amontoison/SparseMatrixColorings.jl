@@ -87,10 +87,11 @@ program basic_coloring
 
   ! -------------------------------------------------------------------------
   ! Version of SparseMatrixColorings.jl embedded in the library.  smc_version
-  ! is the one void-returning entry point, hence a subroutine call; its three
-  ! int* arguments are ordinary c_loc scalars.
+  ! is the one void-returning entry point, hence a subroutine call, and the one
+  ! whose int* outputs are bound as plain intent(out) scalars rather than
+  ! type(c_ptr), so no c_loc is needed here.
   ! -------------------------------------------------------------------------
-  call smc_version(c_loc(major), c_loc(minor), c_loc(patch))
+  call smc_version(major, minor, patch)
   write(*,'(A,I0,A,I0,A,I0)') "SparseMatrixColorings ", major, ".", minor, ".", patch
 
   ! -------------------------------------------------------------------------

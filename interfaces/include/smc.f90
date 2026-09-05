@@ -150,7 +150,7 @@
     subroutine smc_version(major, minor, patch) &
         bind(c, name='smc_version')
       use iso_c_binding
-      type(c_ptr), value :: major, minor, patch
+      integer(c_int), intent(out) :: major, minor, patch
     end subroutine smc_version
 
     ! -------------------------------------------------------------------------

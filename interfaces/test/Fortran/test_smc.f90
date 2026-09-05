@@ -1339,12 +1339,14 @@ contains
   ! =========================================================================
 
   subroutine test_version()
-    integer(c_int), target :: major, minor, patch
+    ! No `target` needed: smc_version's outputs are bound as intent(out)
+    ! scalars, not type(c_ptr), so they are passed by reference directly.
+    integer(c_int) :: major, minor, patch
     major = -1
     minor = -1
     patch = -1
     write(*,'(A)') "version ..."
-    call smc_version(c_loc(major), c_loc(minor), c_loc(patch))
+    call smc_version(major, minor, patch)
     call check(major == SMC_VERSION_MAJOR .and. minor == SMC_VERSION_MINOR .and. &
                patch == SMC_VERSION_PATCH,                                       &
                "smc_version matches the SMC_VERSION_* parameters")

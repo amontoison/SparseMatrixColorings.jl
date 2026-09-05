@@ -679,8 +679,25 @@ println("Generated $OUT_PATH")
 # `type(c_ptr), value` that the caller fills with c_loc(x) or c_null_ptr; the
 # only exception is the `void**` out-parameter, which becomes an
 # `intent(out)` c_ptr receiving a handle.
+#
+# `smc_version` is bound the way Krylov.jl binds `krylov_get_version`: its three
+# `int*` outputs are plain `integer(c_int), intent(out)` scalars, so a caller
+# writes `call smc_version(major, minor, patch)` instead of wrapping each one in
+# c_loc.  Fortran passes scalars by reference, so this is the same ABI.
+#
+# It is a per-argument override rather than a blanket `int* -> intent(out)` rule
+# because `int*` is also used for output *arrays* (`colors`, `members`), which
+# must stay `type(c_ptr)` so the caller can pass c_loc of an array section.
 # ---------------------------------------------------------------------------
-function fortran_arg_type(ctype)
+const FORTRAN_ARG_OVERRIDES = Dict{Tuple{String,String},Tuple{String,String}}(
+  ("smc_version", "major") => ("integer(c_int)", "intent(out)"),
+  ("smc_version", "minor") => ("integer(c_int)", "intent(out)"),
+  ("smc_version", "patch") => ("integer(c_int)", "intent(out)"),
+)
+
+function fortran_arg_type(ctype, fname="", argname="")
+  override = get(FORTRAN_ARG_OVERRIDES, (fname, argname), nothing)
+  override === nothing || return override
   ctype == "int" && return ("integer(c_int)", "value")
   ctype == "size_t" && return ("integer(c_size_t)", "value")
   endswith(ctype, "**") && return ("type(c_ptr)", "intent(out)")
@@ -895,7 +912,7 @@ function emit_f_interface(io, name, ret, args)
   # as a human would write them.
   groups = Tuple{String,String,Vector{String}}[]
   for (aname, ctype) in args
-    ftype, attr = fortran_arg_type(ctype)
+    ftype, attr = fortran_arg_type(ctype, name, aname)
     if !isempty(groups) && groups[end][1] == ftype && groups[end][2] == attr
       push!(groups[end][3], aname)
     else

@@ -429,6 +429,7 @@ jobs:
               interfaces/test/Fortran/test_smc.f90 \
               -I interfaces/include \
               "$LIBPATH/${{ matrix.lib }}"
+          ls -l interfaces/build/test_smc_fortran*
 
       - name: Run Fortran test
         shell: bash
@@ -437,7 +438,20 @@ jobs:
           export PATH="$LIBPATH:$PATH"
           export LD_LIBRARY_PATH="$LIBPATH:${LD_LIBRARY_PATH:-}"
           export DYLD_LIBRARY_PATH="$LIBPATH:${DYLD_LIBRARY_PATH:-}"
+          # gfortran block-buffers stdout when it is a pipe, so if the program
+          # dies the tail of the log is lost and the failure looks like it
+          # happened earlier than it did. Unbuffered output makes the last line
+          # printed the real location of the failure.
+          export GFORTRAN_UNBUFFERED_ALL=1
+          set +e
           interfaces/build/test_smc_fortran
+          rc=$?
+          set -e
+          # Report the raw status: 127 means bash could not exec the binary at
+          # all (missing file or unresolved DLL), which is a different problem
+          # from the program running and then dying.
+          echo "test_smc_fortran exited with $rc"
+          exit $rc
 
       # ---- Fortran examples: every .f90 in interfaces/examples/Fortran ----
       # Globbed rather than listed one step per file so adding an example needs
@@ -465,6 +479,7 @@ jobs:
           export PATH="$LIBPATH:$PATH"
           export LD_LIBRARY_PATH="$LIBPATH:${LD_LIBRARY_PATH:-}"
           export DYLD_LIBRARY_PATH="$LIBPATH:${DYLD_LIBRARY_PATH:-}"
+          export GFORTRAN_UNBUFFERED_ALL=1
           shopt -s nullglob
           srcs=(interfaces/examples/Fortran/*.f90)
           [ "${#srcs[@]}" -gt 0 ] || { echo "::error::no Fortran examples found in interfaces/examples/Fortran"; exit 1; }
