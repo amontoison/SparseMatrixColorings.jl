@@ -46,6 +46,7 @@
 
 program test_smc
   use iso_c_binding
+  use iso_fortran_env, only: output_unit
   implicit none
   include 'smc.f90'          ! <- after implicit none; interfaces, enumerators,
                              !    and type(SmcColoringOptions)
@@ -110,10 +111,15 @@ program test_smc
   integer            :: n_pass = 0
   integer            :: n_fail = 0
   character(len=110) :: ctx = ""
+  logical            :: verbose = .false.
+  character(len=8)   :: verbose_env
 
   ! -------------------------------------------------------------------------
   ! Main
   ! -------------------------------------------------------------------------
+
+  call get_environment_variable("SMC_TEST_VERBOSE", verbose_env)
+  verbose = (len_trim(verbose_env) > 0 .and. trim(verbose_env) /= "0")
 
   call build_matrices()
 
@@ -141,6 +147,19 @@ contains
   subroutine check(cond, msg)
     logical,          intent(in) :: cond
     character(len=*), intent(in) :: msg
+    ! Set SMC_TEST_VERBOSE=1 to echo every check as it is reached.  A crash
+    ! inside the library kills the process without a FAIL line, so the section
+    ! headers alone only narrow the failure to a whole subroutine; with this on,
+    ! the last line printed is the last check that completed.  Used to localize
+    ! a Windows-only failure that cannot be reproduced on Linux or macOS.
+    if (verbose) then
+      if (len_trim(ctx) > 0) then
+        write(*,'(A,A,A,A,A)') "  .. ", trim(msg), "  [", trim(ctx), "]"
+      else
+        write(*,'(A,A)') "  .. ", trim(msg)
+      end if
+      flush(output_unit)
+    end if
     if (cond) then
       n_pass = n_pass + 1
     else
@@ -1354,8 +1373,34 @@ contains
 
   subroutine test_default_options()
     type(SmcColoringOptions) :: o
-    o = smc_default_options()
+    integer :: nonzero_before
+
     write(*,'(A)') "default options ..."
+
+    ! Every default happens to be 0 (SMC_NONSYMMETRIC, SMC_COLUMN, SMC_DIRECT,
+    ! SMC_NATURAL, SMC_FLOAT64 and the three flags are all zero), so checking
+    ! the fields against their expected values cannot tell a working
+    ! smc_default_options from one that writes nothing at all: both leave a
+    ! zeroed struct.  smc_default_options is the one entry point returning a
+    ! derived type BY VALUE, i.e. the one place where the struct-return ABI is
+    ! exercised, so that blind spot is worth closing.  Poison the struct first
+    ! and require the call to overwrite it.
+    o%structure         = 111
+    o%partition         = 112
+    o%decompression     = 113
+    o%order             = 114
+    o%postprocessing    = 115
+    o%symmetric_pattern = 116
+    o%index_base        = 117
+    o%dtype             = 118
+    nonzero_before = o%structure + o%dtype
+
+    o = smc_default_options()
+
+    call check(nonzero_before == 229,                                          &
+               "the poison values were actually stored (sanity)")
+    call check(o%structure /= 111 .and. o%dtype /= 118,                        &
+               "smc_default_options overwrites the struct (struct-return ABI)")
     call check(o%structure     == SMC_NONSYMMETRIC, "default structure is SMC_NONSYMMETRIC")
     call check(o%partition     == SMC_COLUMN,       "default partition is SMC_COLUMN")
     call check(o%decompression == SMC_DIRECT,       "default decompression is SMC_DIRECT")

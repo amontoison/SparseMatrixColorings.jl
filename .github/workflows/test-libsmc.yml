@@ -443,6 +443,14 @@ jobs:
           # happened earlier than it did. Unbuffered output makes the last line
           # printed the real location of the failure.
           export GFORTRAN_UNBUFFERED_ALL=1
+          # Windows-only, and temporary: the suite dies mid-run there with a
+          # status no other platform produces, and a crash inside the library
+          # leaves no FAIL line, so the section headers only narrow it to a
+          # subroutine. Echoing every check makes the last line printed the
+          # exact call that was reached. Drop this once the cause is known.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            export SMC_TEST_VERBOSE=1
+          fi
           set +e
           interfaces/build/test_smc_fortran
           rc=$?
