@@ -24,7 +24,7 @@
 !     expected coloring, because a greedy coloring may legitimately change with
 !     the vertex order.
 !
-! Three Fortran-specific pitfalls this file is careful about:
+! Four Fortran-specific pitfalls this file is careful about:
 !   1. every object whose address is taken with c_loc carries the target
 !      attribute -- without it the address is not even guaranteed to exist;
 !   2. a buffer length may legitimately be zero (postprocessing can leave zero
@@ -34,7 +34,13 @@
 !      perfectly valid promise, which would assert the opposite of the intent;
 !   3. a result is bidirectional when Br_cols > 0, never when Br_len > 0:
 !      Br_cols is 0 for the other partitions and size(A,2) here, while Br_len
-!      can be 0 for a bidirectional result whose row coloring is empty.
+!      can be 0 for a bidirectional result whose row coloring is empty;
+!   4. trim() is never applied to an element of a character array, nor to a
+!      character component of an array element: the value is copied into a
+!      scalar first and trimmed with an explicit substring, X(1:len_trim(X)).
+!      The array-element form is what killed this suite on Windows while every
+!      other platform passed, and Krylov.jl hit the same thing -- which is why
+!      its Fortran sources contain no trim() at all.
 !
 ! Compile (after building libsmc with juliac - see interfaces/README.md):
 !   gfortran -O2 -o interfaces/build/test_smc_fortran \
@@ -907,7 +913,7 @@ contains
     logical        :: nz(MAXDIM,MAXDIM)
 
     opts = o
-    ctx = trim(A%name) // " / " // trim(label)
+    ctx = A%name(1:len_trim(A%name)) // " / " // label(1:len_trim(label))
 
     result = c_null_ptr
     ret = color_matrix(A, opts, result)
@@ -1029,7 +1035,7 @@ contains
     logical        :: same
 
     opts = o
-    ctx = trim(A%name) // " / fast_coloring"
+    ctx = A%name(1:len_trim(A%name)) // " / fast_coloring"
 
     rows = 0; cols = 0; frows = 0; fcols = 0
     ncolors = 0
@@ -1098,11 +1104,17 @@ contains
     integer :: c, order, post, dt, k
     type(SmcColoringOptions) :: o
     character(len=80) :: label
+    character(len=13) :: sname, pname
+    character(len=12) :: dname
+    character(len=21) :: oname
 
     do c = 1, 6
-      write(*,'(A,A,A,A,A,A)') trim(STRUCTURE_NAME(SUPPORTED(1,c))), " / ",    &
-                               trim(PARTITION_NAME(SUPPORTED(2,c))), " / ",    &
-                               trim(DECOMPRESSION_NAME(SUPPORTED(3,c))), " ..."
+      sname = STRUCTURE_NAME(SUPPORTED(1,c))
+      pname = PARTITION_NAME(SUPPORTED(2,c))
+      dname = DECOMPRESSION_NAME(SUPPORTED(3,c))
+      write(*,'(A,A,A,A,A,A)') sname(1:len_trim(sname)), " / ",                &
+                               pname(1:len_trim(pname)), " / ",                &
+                               dname(1:len_trim(dname)), " ..."
       do order = 0, 4
         do post = 0, 1
           do dt = 0, 1
@@ -1114,7 +1126,8 @@ contains
               o%order         = int(order, c_int)
               o%postprocessing = int(post, c_int)
               o%dtype         = int(dt, c_int)
-              write(label,'(A,A,A,I0,A,I0)') "order=", trim(ORDER_NAME(order)), &
+              oname = ORDER_NAME(order)
+              write(label,'(A,A,A,I0,A,I0)') "order=", oname(1:len_trim(oname)),&
                                              " postprocessing=", post, " dtype=", dt
               if (SUPPORTED(1,c) == SMC_SYMMETRIC) then
                 call test_case(SYMM(k), o, label)
@@ -1173,7 +1186,7 @@ contains
         r0 = c_null_ptr
         r1 = c_null_ptr
         if (SUPPORTED(1,c) == SMC_SYMMETRIC) then
-          ctx = trim(SYMM(k)%name) // " / index_base"
+          ctx = SYMM(k)%name(1:len_trim(SYMM(k)%name)) // " / index_base"
           ret = color_matrix(SYMM(k),  o0, r0)
           call check(ret == 0, "0-based coloring")
           ret = color_matrix(SYMM1(k), o1, r1)
@@ -1181,7 +1194,7 @@ contains
           mm = SYMM(k)%m
           nn = SYMM(k)%n
         else
-          ctx = trim(NONSYM(k)%name) // " / index_base"
+          ctx = NONSYM(k)%name(1:len_trim(NONSYM(k)%name)) // " / index_base"
           ret = color_matrix(NONSYM(k),  o0, r0)
           call check(ret == 0, "0-based coloring")
           ret = color_matrix(NONSYM1(k), o1, r1)
@@ -1301,7 +1314,7 @@ contains
 
     write(*,'(A)') "postprocessing ..."
     do k = 1, 2
-      ctx = trim(SYMM(k)%name) // " / postprocessing"
+      ctx = SYMM(k)%name(1:len_trim(SYMM(k)%name)) // " / postprocessing"
       off = smc_default_options()
       on  = smc_default_options()
       off%structure = SMC_SYMMETRIC
