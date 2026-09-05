@@ -186,7 +186,17 @@ julia> collect.(column_groups(result))
 - [`compress`](@ref)
 - [`decompress`](@ref)
 """
-function coloring(
+# `@constprop :aggressive` is not a micro-optimization.
+#
+# Julia widens `Type{R}` to `DataType` when it builds the keyword-argument tuple,
+# so without it inference loses `R` and this returns a `TreeSetColoringResult`
+# (or `BicoloringResult`) whose last type parameter is missing -- even when the
+# caller passes a literal `decompression_eltype=Float32`. The value returned at
+# run time is still correct, so nothing observable breaks in normal use, but the
+# call becomes unresolvable for static compilation: `juliac --trim=safe` rejects
+# it with an "unresolved call" verifier error.
+# It also matters to anyone storing results in a concretely typed container.
+Base.@constprop :aggressive function coloring(
     A::AbstractMatrix,
     problem::ColoringProblem,
     algo::GreedyColoringAlgorithm;
