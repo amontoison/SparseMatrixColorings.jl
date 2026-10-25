@@ -277,6 +277,33 @@ function postprocess_with_tree_set!(
     return nothing
 end
 
+## Maximum matching algorithms
+
+"""
+    AbstractMatchingAlgorithm
+
+Algorithm computing a maximum matching of a bipartite graph, used by
+`bipartite_vertex_cover!`. Both `KuhnMatching` and
+`HopcroftKarpMatching` return a maximum matching; the minimum vertex cover derived from it
+does not depend on the choice, only the running time does.
+"""
+abstract type AbstractMatchingAlgorithm end
+
+"""
+    KuhnMatching()
+
+Kuhn's augmenting path algorithm: one search per left vertex, `O(|V| |E|)` time.
+"""
+struct KuhnMatching <: AbstractMatchingAlgorithm end
+
+"""
+    HopcroftKarpMatching()
+
+Hopcroft-Karp algorithm: augments along a maximal set of shortest augmenting paths in each phase,
+`O(|E| √|V|)` time.
+"""
+struct HopcroftKarpMatching <: AbstractMatchingAlgorithm end
+
 ## Choice of the colors kept for the trivial two-colored structures
 
 #=
@@ -301,10 +328,18 @@ function cover_trivial_structures!(
     undecided_pairs::Vector{Tuple{Int,Int}},
     bicoloring::Bool,
     postprocessing_minimizes::Symbol,
+    matching::AbstractMatchingAlgorithm=KuhnMatching(),
 )
     if bicoloring
         if postprocessing_minimizes == :all_colors
-            bipartite_minimum_cover!(row_color_used, column_color_used, undecided_pairs)
+            # The column colors are the "left" side of the bipartite color graph: on a single
+            # undecided structure, the cover then keeps the column color, as the rule used
+            # before did when nothing else decided.
+            nb_colors = length(row_color_used)
+            ptr, adj = _bipartite_adjacency(
+                [(cj, ci) for (ci, cj) in undecided_pairs], nb_colors, nb_colors
+            )
+            bipartite_vertex_cover!(column_color_used, row_color_used, ptr, adj, matching)
         elseif postprocessing_minimizes == :row_colors
             for (_, cj) in undecided_pairs
                 column_color_used[cj] = true
@@ -344,80 +379,145 @@ function _pair_adjacency(pairs::Vector{Tuple{Int,Int}}, na::Int)
     return ptr, adj
 end
 
-function bipartite_minimum_cover!(
-    row_color_used::Vector{Bool},
-    column_color_used::Vector{Bool},
-    pairs::Vector{Tuple{Int,Int}},
-)
-    # Rows colors are on the left, column colors on the right
-    nb_colors = length(row_color_used)
-    pairs = unique!(sort(pairs))
-    ptr, adj = _pair_adjacency(pairs, nb_colors)
-
-    # Maximum matching (Hopcroft-Karp)
-    match_left = zeros(Int, nb_colors)
-    match_right = zeros(Int, nb_colors)
-    dist = zeros(Int, nb_colors)
-    queue = Vector{Int}(undef, nb_colors)
-    lefts = unique!([a for (a, _) in pairs])
-    while _hk_bfs!(dist, queue, lefts, ptr, adj, match_left, match_right)
-        for a in lefts
-            if match_left[a] == 0
-                _hk_dfs!(a, dist, ptr, adj, match_left, match_right)
+# Same as `_pair_adjacency` for a bipartite graph with left vertices 1:nl and right vertices
+# 1:nr, with duplicate edges removed by stamping the right vertices (no sort).
+function _bipartite_adjacency(pairs::Vector{Tuple{Int,Int}}, nl::Int, nr::Int)
+    ptr, adj = _pair_adjacency(pairs, nl)
+    stamp = zeros(Int, nr)
+    k = 0
+    first = 1
+    for a in 1:nl
+        last = ptr[a + 1] - 1
+        ptr[a] = k + 1
+        for p in first:last
+            b = adj[p]
+            if stamp[b] != a
+                stamp[b] = a
+                k += 1
+                adj[k] = b
             end
         end
+        first = last + 1
     end
+    ptr[nl + 1] = k + 1
+    resize!(adj, k)
+    return ptr, adj
+end
 
-    # Kőnig's theorem: let Z be the vertices reachable from the unmatched right vertices by
-    # alternating paths (non-matching edges from right to left, matching edges from left to
-    # right). Then (right vertices not in Z) ∪ (left vertices in Z) is a minimum vertex cover.
-    # Starting from the column side mirrors the rule used before, which kept the column color
-    # of a trivial structure when nothing else decided.
-    rptr, radj = _pair_adjacency([(b, a) for (a, b) in pairs], nb_colors)
-    rights = unique!(sort!([b for (_, b) in pairs]))
-    visited_left = zeros(Bool, nb_colors)
-    visited_right = zeros(Bool, nb_colors)
+## Minimum vertex cover of a bipartite graph
+
+"""
+    bipartite_vertex_cover!(cover_left, cover_right, ptr, adj, matching)
+
+Set to `true` the entries of `cover_left` and `cover_right` that form a minimum vertex cover of
+the bipartite graph with left vertices `1:length(ptr)-1`, right vertices `1:length(cover_right)`,
+and neighbors `adj[ptr[a]:(ptr[a+1]-1)]` of the left vertex `a`.
+
+The maximum matching is computed with `matching`, and the cover is read off it with Kőnig's
+theorem: let `Z` be the set of vertices reachable from the unmatched left vertices by alternating
+paths; then `(left \\ Z) ∪ (right ∩ Z)` is a minimum vertex cover. `Z` is the same for every
+maximum matching, so the cover does not depend on `matching`.
+"""
+function bipartite_vertex_cover!(
+    cover_left::AbstractVector{Bool},
+    cover_right::AbstractVector{Bool},
+    ptr::Vector{Int},
+    adj::Vector{Int},
+    matching::AbstractMatchingAlgorithm,
+)
+    nl = length(ptr) - 1
+    nr = length(cover_right)
+    match_left = zeros(Int, nl)
+    match_right = zeros(Int, nr)
+    maximum_matching!(match_left, match_right, ptr, adj, matching)
+
+    # alternating breadth-first search from the unmatched left vertices
+    in_z_left = zeros(Bool, nl)
+    in_z_right = zeros(Bool, nr)
+    queue = Vector{Int}(undef, nl)
     nq = 0
-    for b in rights
-        if match_right[b] == 0
-            visited_right[b] = true
+    for a in 1:nl
+        if match_left[a] == 0 && ptr[a + 1] > ptr[a]
+            in_z_left[a] = true
             nq += 1
-            queue[nq] = b
+            queue[nq] = a
         end
     end
     head = 1
     while head <= nq
-        b = queue[head]
+        a = queue[head]
         head += 1
-        for p in rptr[b]:(rptr[b + 1] - 1)
-            a = radj[p]
-            if !visited_left[a] && match_left[a] != b
-                visited_left[a] = true
-                b2 = match_left[a]  # a is matched, otherwise the matching is not maximum
-                if !visited_right[b2]
-                    visited_right[b2] = true
+        for p in ptr[a]:(ptr[a + 1] - 1)
+            b = adj[p]
+            if !in_z_right[b] && match_left[a] != b
+                in_z_right[b] = true
+                a2 = match_right[b]  # b is matched, otherwise the matching is not maximum
+                if !in_z_left[a2]
+                    in_z_left[a2] = true
                     nq += 1
-                    queue[nq] = b2
+                    queue[nq] = a2
                 end
             end
         end
     end
-    for a in lefts
-        if visited_left[a]
-            row_color_used[a] = true
+
+    for a in 1:nl
+        if ptr[a + 1] > ptr[a] && !in_z_left[a]
+            cover_left[a] = true
         end
     end
-    for b in rights
-        if !visited_right[b]
-            column_color_used[b] = true
+    for b in 1:nr
+        if in_z_right[b]
+            cover_right[b] = true
         end
     end
     return nothing
 end
 
-function _hk_bfs!(dist, queue, lefts, ptr, adj, match_left, match_right)
+function maximum_matching!(match_left, match_right, ptr, adj, ::KuhnMatching)
+    visited = zeros(Int, length(match_right))
+    for a in 1:(length(ptr) - 1)
+        _kuhn_augment!(a, a, visited, ptr, adj, match_left, match_right)
+    end
+    return nothing
+end
+
+# Look for an augmenting path from the left vertex a; `visited[b] == stamp` marks the right
+# vertices already tried during the current search, which avoids resetting `visited`.
+function _kuhn_augment!(a, stamp, visited, ptr, adj, match_left, match_right)
+    for p in ptr[a]:(ptr[a + 1] - 1)
+        b = adj[p]
+        visited[b] == stamp && continue
+        visited[b] = stamp
+        if match_right[b] == 0 ||
+            _kuhn_augment!(match_right[b], stamp, visited, ptr, adj, match_left, match_right)
+            match_left[a] = b
+            match_right[b] = a
+            return true
+        end
+    end
+    return false
+end
+
+function maximum_matching!(match_left, match_right, ptr, adj, ::HopcroftKarpMatching)
+    nl = length(ptr) - 1
+    dist = zeros(Int, nl)
+    queue = Vector{Int}(undef, nl)
+    while _hk_bfs!(dist, queue, ptr, adj, match_left, match_right)
+        for a in 1:nl
+            if match_left[a] == 0
+                _hk_dfs!(a, dist, ptr, adj, match_left, match_right)
+            end
+        end
+    end
+    return nothing
+end
+
+# Layer the left vertices by alternating distance from the unmatched ones, and tell whether an
+# augmenting path exists.
+function _hk_bfs!(dist, queue, ptr, adj, match_left, match_right)
     nq = 0
-    for a in lefts
+    for a in eachindex(match_left)
         if match_left[a] == 0
             dist[a] = 0
             nq += 1
@@ -445,6 +545,7 @@ function _hk_bfs!(dist, queue, lefts, ptr, adj, match_left, match_right)
     return found
 end
 
+# Augment along a shortest augmenting path from a, following the layers of `_hk_bfs!`.
 function _hk_dfs!(a, dist, ptr, adj, match_left, match_right)
     for p in ptr[a]:(ptr[a + 1] - 1)
         b = adj[p]
@@ -457,7 +558,7 @@ function _hk_dfs!(a, dist, ptr, adj, match_left, match_right)
             return true
         end
     end
-    dist[a] = typemax(Int)
+    dist[a] = typemax(Int)  # dead end for this phase
     return false
 end
 
